@@ -6,6 +6,10 @@
 #include <unistd.h>
 #include <sys/wait.h>
 #include <sys/resource.h>
+#include <dirent.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <constants.h>
 
 VMType *VMType_exists(DataCenter *dc, const char* type_id){
 	for(size_t i = 0; i < dc->num_vm_types; i++){
@@ -237,23 +241,124 @@ void reservation_destroy(DataCenter *dc, Reservation *reservation) {
 
 	dc->num_reservations--;
 }
-
-void spawn_vm_child(VM *vm) {
-	(void)vm; // To avoid warning.
-
-	// TODO: Limit RAM, DISK and use exec with cpulimit.
-
-	fprintf(stderr, "VM execution not implemented in base version.\n");
+int cpu_limit(double vmCPU, DataCenter *dc) {
+    double limit = (100.0 * vmCPU * dc->real_cores) / (dc->servers[0].total.cpu * dc->num_servers);
+    return (int)limit;
 }
 
-int spawn_all_vms(Reservation *res) {
+void spawn_vm_child(VM *vm, DataCenter *dc) {
+	// TODO: Limit RAM, DISK and use exec with cpulimit.
+	struct rlimit rlRam; 
+	rlRam.rlim_cur = vm->type->required.ram * GIB_TO_BYTE;
+	rlRam.rlim_max = vm->type->required.ram * GIB_TO_BYTE;
+	setrlimit(RLIMIT_AS, &rlRam);
+
+	struct rlimit rlDisk;
+	rlDisk.rlim_cur = vm->type->required.disk * GIB_TO_BYTE;
+	rlDisk.rlim_max = vm->type->required.disk * GIB_TO_BYTE;
+	setrlimit(RLIMIT_FSIZE, &rlDisk);
+	
+	int limit_val = cpu_limit(vm->type->required.cpu,dc);
+	char limit_str[16];
+    snprintf(limit_str, sizeof(limit_str), "%d", limit_val);
+	char *args[] = {
+        "cpulimit",           
+        "-q",              
+        "-f",                
+        "-l",                 
+        limit_str,            
+        "--",                
+        vm->type->exec_path,  
+        NULL                  
+    };
+	execvp("cpulimit", args);
+	printf("Failed to execute cpulimit for VM %s.\n", vm->id);
+    exit(EXIT_FAILURE);
+}
+
+void clone_directory(char *srcPath, char *destPath) {
+	DIR *dir = opendir(srcPath);
+	if (!dir) {
+		printf("Failed to open source directory: %s\n", srcPath);
+		return;
+	}
+	// Create destination directory with full permissions
+	if(mkdir(destPath, 0777) != 0) {
+		printf("Failed to create destination directory: %s\n", destPath);
+		return;
+	}
+
+	struct dirent *entry;
+	while ((entry = readdir(dir)) != NULL) {
+		if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+        continue;
+    }
+
+		char srcFilePath[MAX_PATH_SIZE];
+		char destFilePath[MAX_PATH_SIZE];
+		
+		//Pull the full path of the source and destination files/directories
+		snprintf(srcFilePath, sizeof(srcFilePath), "%s/%s", srcPath, entry->d_name);
+		snprintf(destFilePath, sizeof(destFilePath), "%s/%s", destPath, entry->d_name);
+
+		if (entry->d_type == DT_DIR) {
+			clone_directory(srcFilePath, destFilePath);
+		} else {
+			int srcFile = open(srcFilePath, O_RDONLY);
+			// Create destination file with read/write permissions for owner, and read for group and others
+			int destFile = open(destFilePath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+		
+
+			if (srcFile < 0 || destFile < 0) {
+				printf("Failed to open files for cloning: %s -> %s\n", srcFilePath, destFilePath);
+				if (srcFile >= 0) close(srcFile);
+				if (destFile >= 0) close(destFile);
+				continue;
+			}
+
+			char buffer[BUFFER_SIZE];
+			size_t bytesRead;
+			while ((bytesRead = read(srcFile, buffer, sizeof(buffer))) > 0) {
+				write(destFile, buffer, bytesRead);
+			}
+
+			close(srcFile);
+			close(destFile);
+		}
+	}
+
+	closedir(dir);
+	}
+	
+
+int spawn_all_vms(Reservation *res, DataCenter *dc) {
+	//clone -> fork  - > chdir -> execl
+	// TODO: Implement fork code. Set VM PID and update VM state to running.
 	for (size_t i = 0; i < res->num_vms; i++) {
 		VM *vm = res->vms[i];
+		
+		//Clone directory to a temporary location for the VM to run in isolation.
+		mkdir(TEMP_DIR, 0777);
 
-		// TODO: Implement fork code. Set VM PID and update VM state to running.
+		char res_dir[MAX_PATH_SIZE];
+        snprintf(res_dir, sizeof(res_dir), "%s/%s", TEMP_DIR, res->id);
+        mkdir(res_dir, 0777);
+		char temp_dir[MAX_PATH_SIZE];
+        snprintf(temp_dir, sizeof(temp_dir), "%s/%s/%s", TEMP_DIR, res->id, vm->id);
+		clone_directory(vm->type->input_folder, temp_dir);
 
-		spawn_vm_child(vm);
-
+		pid_t pid = fork();
+		if (pid < 0) {
+			fprintf(stderr, "Failed to fork for VM %s.\n", vm->id);
+			return 1;
+		} else if (pid == 0) {
+			// Child process
+			chdir(temp_dir);
+			spawn_vm_child(vm, dc);	
+		}else{
+			vm->pid = pid;
+			vm->state = VM_STATE_RUNNING;
+		}
 	}
 
 	return 0;
@@ -261,7 +366,11 @@ int spawn_all_vms(Reservation *res) {
 
 void wait_for_all_vms(Reservation *res) {
 	for (size_t i = 0; i < res->num_vms; i++) {
-		// TODO: IMPLEMENT WAITING FOR VM
+		int status;
+		waitpid(res->vms[i]->pid, &status, 0);
+		if(WIFEXITED(status) && WEXITSTATUS(status) != 0){
+			fprintf(stderr, "VM %s exited with an error.\n", res->vms[i]->id);
+		}
 
 		res->vms[i]->state = VM_STATE_TERMINATED;
 	}

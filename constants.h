@@ -1,9 +1,11 @@
 #define MAX_STRING_SIZE 40
 #define MAX_PATH_SIZE 1024
-
+#define TEMP_DIR "/tmp/CloudIST"
 #define MAX_VM_TYPES           128
 #define MAX_VM_ID_STRING       MAX_STRING_SIZE + 4 // 4 = "_" + 3 digits
 #define MAX_HOSTED_VMS         128
+#define BUFFER_SIZE            4096
+#define GIB_TO_BYTE            1073741824;
 
 #define MAX_RESERVATIONS       256
 #define MAX_RESERVATIONS_ITEMS 32

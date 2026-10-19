@@ -75,6 +75,8 @@ typedef struct DataCenter {
 	Reservation reservations[MAX_RESERVATIONS];
     size_t num_reservations;
 
+    size_t real_cores;              // Number of real CPU cores in the datacenter.
+
 	int configured;		      // Wheter the datacenter is configured or not.
 } DataCenter;
 
