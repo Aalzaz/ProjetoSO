@@ -1,16 +1,8 @@
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-typedef struct {
-    char *filepath;
-    char *filename;
-} ConfFile;
-
-typedef struct {
-    ConfFile *files;
-    size_t count;
-    size_t capacity;
-} ConfFileList;
+#include "customstructs.h"
 
 ConfFileList* conf_list_create(size_t initial_capacity) {
     ConfFileList *list = malloc(sizeof(ConfFileList));

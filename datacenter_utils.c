@@ -1,4 +1,5 @@
 #include "datacenter_utils.h"
+#include "constants.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -9,7 +10,6 @@
 #include <dirent.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#include <constants.h>
 
 VMType *VMType_exists(DataCenter *dc, const char* type_id){
 	for(size_t i = 0; i < dc->num_vm_types; i++){
@@ -242,7 +242,7 @@ void reservation_destroy(DataCenter *dc, Reservation *reservation) {
 	dc->num_reservations--;
 }
 int cpu_limit(double vmCPU, DataCenter *dc) {
-    double limit = (100.0 * vmCPU * dc->real_cores) / (dc->servers[0].total.cpu * dc->num_servers);
+    double limit = (100.0 * vmCPU * (double)dc->real_cores) / (dc->servers[0].total.cpu * (double)dc->num_servers);
     return (int)limit;
 }
 
@@ -301,7 +301,13 @@ void clone_directory(char *srcPath, char *destPath) {
 		snprintf(srcFilePath, sizeof(srcFilePath), "%s/%s", srcPath, entry->d_name);
 		snprintf(destFilePath, sizeof(destFilePath), "%s/%s", destPath, entry->d_name);
 
-		if (entry->d_type == DT_DIR) {
+		struct stat entryStat;
+		if (lstat(srcFilePath, &entryStat) != 0) {
+			printf("Failed to inspect source entry: %s\n", srcFilePath);
+			continue;
+		}
+
+		if (S_ISDIR(entryStat.st_mode)) {
 			clone_directory(srcFilePath, destFilePath);
 		} else {
 			int srcFile = open(srcFilePath, O_RDONLY);
@@ -317,9 +323,9 @@ void clone_directory(char *srcPath, char *destPath) {
 			}
 
 			char buffer[BUFFER_SIZE];
-			size_t bytesRead;
+			ssize_t bytesRead;
 			while ((bytesRead = read(srcFile, buffer, sizeof(buffer))) > 0) {
-				write(destFile, buffer, bytesRead);
+				write(destFile, buffer, (size_t)bytesRead);
 			}
 
 			close(srcFile);

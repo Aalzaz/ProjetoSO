@@ -77,19 +77,21 @@ void reservation_destroy(DataCenter *dc, Reservation *reservation);
  * (either execs successfully or calls exit(1) on failure).
  *
  * @param vm Pointer to the VM being spawned.
+ * @param dc Pointer to the Data Center.
  */
-void spawn_vm_child(VM *vm);
+void spawn_vm_child(VM *vm, DataCenter *dc);
 
 /**
  * Forks one child per VM in the reservation, calling spawn_vm_child()
  * in each child and recording the pid/state in the parent.
  *
  * @param res Pointer to the Reservation whose VMs should be spawned.
+ * @param dc Pointer to the Data Center.
  *
  * @return 0 on success.
  * @return 1 if any fork() call fails.
  */
-int spawn_all_vms(Reservation *res);
+int spawn_all_vms(Reservation *res, DataCenter *dc);
 
 /**
  * Blocks until every VM's process has exited, updating each VM's state
