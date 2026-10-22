@@ -1,5 +1,6 @@
 #include "datacenter_utils.h"
 #include "constants.h"
+#include "resources.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -249,18 +250,19 @@ int cpu_limit(double vmCPU, DataCenter *dc) {
 void spawn_vm_child(VM *vm, DataCenter *dc) {
 	// TODO: Limit RAM, DISK and use exec with cpulimit.
 	struct rlimit rlRam; 
-	rlRam.rlim_cur = vm->type->required.ram * GIB_TO_BYTE;
-	rlRam.rlim_max = vm->type->required.ram * GIB_TO_BYTE;
+	rlRam.rlim_cur = vm->type->required.ram << GB_TO_BYTE; // Convert GB to bytes
+	rlRam.rlim_max = vm->type->required.ram << GB_TO_BYTE;
 	setrlimit(RLIMIT_AS, &rlRam);
 
 	struct rlimit rlDisk;
-	rlDisk.rlim_cur = vm->type->required.disk * GIB_TO_BYTE;
-	rlDisk.rlim_max = vm->type->required.disk * GIB_TO_BYTE;
+	rlDisk.rlim_cur = vm->type->required.disk << GB_TO_BYTE;
+	rlDisk.rlim_max = vm->type->required.disk << GB_TO_BYTE;
 	setrlimit(RLIMIT_FSIZE, &rlDisk);
 	
 	int limit_val = cpu_limit(vm->type->required.cpu,dc);
-	char limit_str[16];
-    snprintf(limit_str, sizeof(limit_str), "%d", limit_val);
+	// Int to string conversion for cpulimit argument
+	char limit_str[12];
+	snprintf(limit_str, sizeof(limit_str), "%d", limit_val);
 	char *args[] = {
         "cpulimit",           
         "-q",              
@@ -272,7 +274,7 @@ void spawn_vm_child(VM *vm, DataCenter *dc) {
         NULL                  
     };
 	execvp("cpulimit", args);
-	printf("Failed to execute cpulimit for VM %s.\n", vm->id);
+	fprintf(stderr, "Failed to execute cpulimit for VM %s.\n", vm->id);
     exit(EXIT_FAILURE);
 }
 
@@ -344,6 +346,7 @@ int spawn_all_vms(Reservation *res, DataCenter *dc) {
 		VM *vm = res->vms[i];
 		
 		//Clone directory to a temporary location for the VM to run in isolation.
+		//Guarantee that the TEMP_DIR exists before creating subdirectories for reservations and VMs.
 		mkdir(TEMP_DIR, 0777);
 
 		char res_dir[MAX_PATH_SIZE];
@@ -377,8 +380,8 @@ void wait_for_all_vms(Reservation *res) {
 		if(WIFEXITED(status) && WEXITSTATUS(status) != 0){
 			fprintf(stderr, "VM %s exited with an error.\n", res->vms[i]->id);
 		}
-
 		res->vms[i]->state = VM_STATE_TERMINATED;
+		resources_add(&res->vms[i]->server->available, res->vms[i]->type->required);
 	}
 }
 

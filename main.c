@@ -4,76 +4,23 @@
 #include <unistd.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <pthread.h>
+#include <semaphore.h>
 
 #include "customstructs.h"
 #include "parser.h"
 #include "datacenter.h"
 #include "constants.h"
 
-int main(int argc, char **argv){
-	DataCenter dc;
-	datacenter_init(&dc);
+void *process_commands(void *args) {
+		ThreadArgs *thread_args = (ThreadArgs *)args;
+		char *filepath = thread_args->filepath;
+		DataCenter *dc = thread_args->dc;
+		sem_t *thread_sem = thread_args->thread_sem;
 
-	if (argc != 7) {
-    fprintf(stderr, "Usage: %s <servers> <ram> <disk> <cpus> <input_dir> <real_cores>\n", argv[0]);
-    return 1;
-	}
-
-	size_t servers;
-	size_t ram;
-	size_t disk;
-	size_t real_cores;
-	double cpu;
-	char *input_dir = argv[5];
-	DIR *dir = opendir(input_dir);
-
-	if (parse_size_t_arg(argv[1], &servers) != 0 ||
-			parse_size_t_arg(argv[2], &ram) != 0 ||
-			parse_size_t_arg(argv[3], &disk) != 0 ||
-			parse_double_arg(argv[4], &cpu) != 0 ||
-			parse_size_t_arg(argv[6], &real_cores) != 0 ||
-			dir == NULL){
-		fprintf(stderr, "Invalid command line arguments.\n");
-		return 1;
-	}
-	//Dynamic array MAX_STRING_SIZE used for the initial capacity of the configuration file list.
-	ConfFileList *conf_files = conf_list_create(MAX_STRING_SIZE);
-	if (!conf_files) {
-		fprintf(stderr, "Failed to create configuration file list.\n");
-		return 1;
-	}
-
-	while(1){
-		struct dirent *entry = readdir(dir);
-		if (entry == NULL) {
-			break;
-		}
-		size_t len = strlen(entry->d_name);
-		if (len > 4 && strcmp(entry->d_name + len - 4, ".conf") == 0) {
-			if (conf_list_add(conf_files, input_dir, entry->d_name) != 0) {
-				fprintf(stderr, "Failed to add configuration file: %s\n", entry->d_name);
-				return 1;
-			}
-		}
-	}
-	qsort(conf_files->files, conf_files->count, sizeof(ConfFile), conf_file_compare);
-
-	Resources resources = {
-    .ram = ram,
-    .disk = disk,
-    .cpu = cpu
-	};
-
-	if(datacenter_configure(&dc, servers, &resources) != 0){
-		fprintf(stderr, "Failed to configure Data Center.\n");
-		return 1;
-	}
-
-	size_t count = 0;
-	while(count < conf_files->count){
-		int file_fd = open(conf_files->files[count].filepath, O_RDONLY);
+		int file_fd = open(filepath, O_RDONLY);
 		if (file_fd < 0) {
-			fprintf(stderr, "Failed to open configuration file: %s\n", conf_files->files[count].filepath);
+			fprintf(stderr, "Failed to open configuration file: %s\n", filepath);
 			return 1;
 		}
 		int cycle = 1;
@@ -174,15 +121,125 @@ int main(int argc, char **argv){
 					break;
 
 				case EOC:
-					cycle = 0;
+				cycle = 0;
 					if (close(file_fd) < 0) {
-						fprintf(stderr, "Failed to close configuration file: %s\n", conf_files->files[count].filepath);
+						fprintf(stderr, "Failed to close configuration file: %s\n",filepath);
+						free(thread_args);
+						sem_post(&thread_sem); // Increment semaphore on failure
 						return 1;
 					}
-					count++;
 					break;
 				}
 		}
+	sem_post(&thread_sem); // Increment semaphore after thread completion
+	free(thread_args);
+	return 0;
+}
+
+
+int main(int argc, char **argv){
+	DataCenter dc;
+	datacenter_init(&dc);
+
+	if (argc != 8) {
+    fprintf(stderr, "Usage: %s <servers> <ram> <disk> <cpus> <input_dir> <real_cores> <max_threads>\n", argv[0]);
+    return 1;
+	}
+
+	size_t servers;
+	size_t ram;
+	size_t disk;
+	size_t real_cores;
+	size_t max_threads;
+	double cpu;
+	char *input_dir = argv[5];
+	DIR *dir = opendir(input_dir);
+
+	if (parse_size_t_arg(argv[1], &servers) != 0 ||
+			parse_size_t_arg(argv[2], &ram) != 0 ||
+			parse_size_t_arg(argv[3], &disk) != 0 ||
+			parse_double_arg(argv[4], &cpu) != 0 ||
+			parse_size_t_arg(argv[6], &real_cores) != 0 ||
+			parse_size_t_arg(argv[7], &max_threads) != 0 ||
+			dir == NULL){
+		fprintf(stderr, "Invalid command line arguments.\n");
+		return 1;
+	}
+	//Dynamic array MAX_STRING_SIZE used for the initial capacity of the configuration file list.
+
+	ConfFileList *conf_files = conf_list_create(MAX_STRING_SIZE);
+	if (!conf_files) {
+		fprintf(stderr, "Failed to create configuration file list.\n");
+		return 1;
+	}
+		
+	
+	while(1){
+		struct dirent *entry = readdir(dir);
+		if (entry == NULL) {
+			break;
+		}
+		size_t len = strlen(entry->d_name);
+		if (len > 4 && strcmp(entry->d_name + len - 4, ".conf") == 0) {
+			if (conf_list_add(conf_files, input_dir, entry->d_name) != 0) {
+				fprintf(stderr, "Failed to add configuration file: %s\n", entry->d_name);
+				return 1;
+			}
+		}
+	}
+	closedir(dir);
+
+	//Alphabetically sorted, but with multi threading, the order of execution is not guaranteed.
+	qsort(conf_files->files, conf_files->count, sizeof(ConfFile), conf_file_compare);
+
+	Resources resources = {
+    .ram = ram,
+    .disk = disk,
+    .cpu = cpu
+	};
+
+	if(datacenter_configure(&dc, servers, &resources) != 0){
+		fprintf(stderr, "Failed to configure Data Center.\n");
+		return 1;
+	}
+	
+	sem_t thread_sem;
+	if (sem_init(&thread_sem, 0, max_threads) != 0) {
+		fprintf(stderr, "Failed to initialize semaphore for thread limit.\n");
+		return 1;
+	}
+
+	size_t count = 0;
+	pthread_t thread[max_threads];
+
+	while(count < conf_files->count){
+		// Decrement semaphore to limit concurrent threads
+		sem_wait(&thread_sem); 
+		
+		ThreadArgs *args = malloc(sizeof(ThreadArgs));
+		if(args == NULL) {
+			fprintf(stderr, "Failed to allocate memory for thread arguments.\n");
+			return 1;
+		}
+		args->filepath = conf_files->files[count].filepath;
+    	args->dc = &dc;
+		args->thread_sem = &thread_sem;
+
+		//Avoid the loss of a thread.
+		if (count >= max_threads) 
+        	pthread_join(thread[count % max_threads], NULL);
+
+		if(pthread_create(&thread[count % max_threads], NULL, process_commands, (void*)args) != 0) {
+			fprintf(stderr, "Failed to create thread for configuration file: %s\n", conf_files->files[count].filepath);
+			free(args);
+			sem_post(&thread_sem); // Increment semaphore on failure
+			return 1;
+		}
+		count++;
+	}
+	int active_threads = (count < max_threads) ? count : max_threads;
+	for (int i = 0; i < active_threads; i++) {
+		pthread_join(thread[i], NULL);
 	}
 	datacenter_destroy(&dc);
 	conf_list_destroy(conf_files);

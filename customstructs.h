@@ -1,7 +1,15 @@
 #ifndef CUSTOMSTRUCTS_H
 #define CUSTOMSTRUCTS_H
 
+#include "datacenter.h"
 #include <stddef.h>
+#include <semaphore.h>
+
+typedef struct {
+    char *filepath;
+    DataCenter *dc;
+    sem_t *thread_sem;
+} ThreadArgs;
 
 typedef struct {
     char *filepath;

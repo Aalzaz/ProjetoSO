@@ -3,6 +3,7 @@
 
 #include <stdio.h>
 #include <sys/types.h>
+#include <threads.h>
 
 #include "resources.h"
 #include "constants.h"
@@ -35,6 +36,7 @@ typedef struct Server {
 	size_t id;		     // Server ID (1, 2, 3, ...)
 	Resources total;     // Resources that Server has.
 	Resources available; // Resources still available.
+    pthread_mutex_t server_mutex;
 
 	VM *hosted_vms[MAX_HOSTED_VMS];
     size_t num_hosted_vms;
