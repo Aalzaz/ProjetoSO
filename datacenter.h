@@ -3,7 +3,7 @@
 
 #include <stdio.h>
 #include <sys/types.h>
-#include <threads.h>
+#include <pthread.h>
 
 #include "resources.h"
 #include "constants.h"
@@ -36,7 +36,7 @@ typedef struct Server {
 	size_t id;		     // Server ID (1, 2, 3, ...)
 	Resources total;     // Resources that Server has.
 	Resources available; // Resources still available.
-    pthread_mutex_t server_mutex;
+    pthread_mutex_t mutex_server;
 
 	VM *hosted_vms[MAX_HOSTED_VMS];
     size_t num_hosted_vms;
@@ -73,9 +73,11 @@ typedef struct DataCenter {
 
 	VMType vm_types[MAX_VM_TYPES];
     size_t num_vm_types;
+    pthread_mutex_t mutex_VM_types;
 
 	Reservation reservations[MAX_RESERVATIONS];
     size_t num_reservations;
+    pthread_mutex_t mutex_reservation;
 
     size_t real_cores;              // Number of real CPU cores in the datacenter.
 

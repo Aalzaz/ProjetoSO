@@ -7,8 +7,8 @@
 
 typedef struct {
     char *filepath;
-    DataCenter *dc;
-    sem_t *thread_sem;
+    DataCenter dc;
+    sem_t thread_sem;
 } ThreadArgs;
 
 typedef struct {

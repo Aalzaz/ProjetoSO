@@ -1,6 +1,7 @@
 #include "datacenter_utils.h"
 #include "constants.h"
 #include "resources.h"
+#include "filesystem.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -199,6 +200,7 @@ Reservation *find_pending_reservation(DataCenter *dc, const char *reservation_id
 void reservation_destroy(DataCenter *dc, Reservation *reservation) {
 	// Free every VM belonging to the reservation.
 	for (size_t i = 0; i < reservation->num_vms; i++) {
+		pthread_mutex_lock(&reservation->vms[i]->server->mutex_server);
 		VM *vm = reservation->vms[i];
 		Server *server = vm->server;
 
@@ -217,11 +219,11 @@ void reservation_destroy(DataCenter *dc, Reservation *reservation) {
 				break;
 			}
 		}
-
+		pthread_mutex_unlock(&server->mutex_server);
 		free(vm);
 		reservation->vms[i] = NULL;
 	}
-
+	pthread_mutex_lock(&dc->mutex_reservation);
 	reservation->num_vms = 0;
 
 	// Find the reservation inside the Data Center reservation list.
@@ -241,10 +243,11 @@ void reservation_destroy(DataCenter *dc, Reservation *reservation) {
 					(dc->num_reservations - idx - 1) * sizeof(Reservation));
 
 	dc->num_reservations--;
+	pthread_mutex_unlock(&dc->mutex_reservation);
 }
 int cpu_limit(double vmCPU, DataCenter *dc) {
     double limit = (100.0 * vmCPU * (double)dc->real_cores) / (dc->servers[0].total.cpu * (double)dc->num_servers);
-    return (int)limit;
+    return (limit <= 0) ? 1 : limit;
 }
 
 void spawn_vm_child(VM *vm, DataCenter *dc) {
@@ -278,20 +281,44 @@ void spawn_vm_child(VM *vm, DataCenter *dc) {
     exit(EXIT_FAILURE);
 }
 
+void lock_reservationServers(DataCenter *dc, Reservation *res, int *required_servers){
+	//Creates the array of servers to be locked
+	
+  	for(size_t i = 0; i < res->items_count; i++){
+    	required_servers[res->items[i].server_id - 1] = 1;
+  	}
+  	for (size_t i = 0; i < dc->num_servers; i++){
+		if(required_servers[i]){
+		pthread_mutex_lock(&dc->servers[i].mutex_server);
+		}
+	}
+}
+
+void unlock_reservationServers(DataCenter *dc, int* required_servers){
+	for (size_t i = 0; i < dc->num_servers; i++){
+    if(required_servers[i]){
+      pthread_mutex_unlock(&dc->servers[i].mutex_server);
+    	}
+	}
+}
+
 void clone_directory(char *srcPath, char *destPath) {
 	DIR *dir = opendir(srcPath);
 	if (!dir) {
-		printf("Failed to open source directory: %s\n", srcPath);
+		fprintf(stderr, "Failed to open source directory: %s\n", srcPath);
 		return;
 	}
 	// Create destination directory with full permissions
-	if(mkdir(destPath, 0777) != 0) {
-		printf("Failed to create destination directory: %s\n", destPath);
-		return;
+	if(!path_exists(destPath)){
+		if(mkdir(destPath, 0777) != 0) {
+			fprintf(stderr, "Failed to create destination directory: %s\n", destPath);
+			return;
+		}
 	}
 
 	struct dirent *entry;
 	while ((entry = readdir(dir)) != NULL) {
+		//Prevent the processing of the  current directory or it's parent
 		if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
         continue;
     }
@@ -305,11 +332,12 @@ void clone_directory(char *srcPath, char *destPath) {
 
 		struct stat entryStat;
 		if (lstat(srcFilePath, &entryStat) != 0) {
-			printf("Failed to inspect source entry: %s\n", srcFilePath);
+			fprintf(stderr, "Failed to inspect source entry: %s\n", srcFilePath);
 			continue;
 		}
 
 		if (S_ISDIR(entryStat.st_mode)) {
+			//Recursive cloning
 			clone_directory(srcFilePath, destFilePath);
 		} else {
 			int srcFile = open(srcFilePath, O_RDONLY);
@@ -318,7 +346,7 @@ void clone_directory(char *srcPath, char *destPath) {
 		
 
 			if (srcFile < 0 || destFile < 0) {
-				printf("Failed to open files for cloning: %s -> %s\n", srcFilePath, destFilePath);
+				fprintf(stderr, "Failed to open files for cloning: %s -> %s\n", srcFilePath, destFilePath);
 				if (srcFile >= 0) close(srcFile);
 				if (destFile >= 0) close(destFile);
 				continue;
@@ -347,13 +375,17 @@ int spawn_all_vms(Reservation *res, DataCenter *dc) {
 		
 		//Clone directory to a temporary location for the VM to run in isolation.
 		//Guarantee that the TEMP_DIR exists before creating subdirectories for reservations and VMs.
-		mkdir(TEMP_DIR, 0777);
+		if(!path_exists(TEMP_DIR))
+			mkdir(TEMP_DIR, 0777);
 
 		char res_dir[MAX_PATH_SIZE];
         snprintf(res_dir, sizeof(res_dir), "%s/%s", TEMP_DIR, res->id);
-        mkdir(res_dir, 0777);
+		if(!path_exists(res_dir))
+        	mkdir(res_dir, 0777);
+
 		char temp_dir[MAX_PATH_SIZE];
         snprintf(temp_dir, sizeof(temp_dir), "%s/%s/%s", TEMP_DIR, res->id, vm->id);
+		//Path is guaranted by the function
 		clone_directory(vm->type->input_folder, temp_dir);
 
 		pid_t pid = fork();
@@ -375,13 +407,12 @@ int spawn_all_vms(Reservation *res, DataCenter *dc) {
 
 void wait_for_all_vms(Reservation *res) {
 	for (size_t i = 0; i < res->num_vms; i++) {
-		int status;
+		int status = 0;
 		waitpid(res->vms[i]->pid, &status, 0);
 		if(WIFEXITED(status) && WEXITSTATUS(status) != 0){
 			fprintf(stderr, "VM %s exited with an error.\n", res->vms[i]->id);
 		}
 		res->vms[i]->state = VM_STATE_TERMINATED;
-		resources_add(&res->vms[i]->server->available, res->vms[i]->type->required);
 	}
 }
 

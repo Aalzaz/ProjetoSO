@@ -120,4 +120,24 @@ const char *vm_state_to_string(VMState state);
  */
 const char *res_state_to_string(ReservationState state);
 
+
+
+/**
+ * @brief Lock's the mutex of each server that is locked, in crescent order
+ * 
+ * @param dc The DataCenter
+ * @param res The reservation
+ * @param array of size Num servers
+ * 
+ * @return In order array of locked[1 for locked]
+ */
+void lock_reservationServers(DataCenter *dc, Reservation *res, int *required_servers);
+/**
+ * @brief Unlock's the mutex of each server that is locked, in crescent order
+ * 
+ * @param dc  The DataCenter
+ * @param required_servers Array in crescent order to be unlocked, 1 for unlock
+ */
+void unlock_reservationServers(DataCenter *dc, int* required_servers);
+
 #endif // DATACENTER_UTILS__H

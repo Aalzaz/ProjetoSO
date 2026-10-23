@@ -1,6 +1,7 @@
 #include "datacenter.h"
 #include "datacenter_utils.h"
 
+#include <pthread.h>
 #include <stdio.h>
 #include <time.h>
 #include <stdlib.h>
@@ -31,8 +32,7 @@ int datacenter_configure(DataCenter *dc, size_t num_servers, Resources *resource
     fprintf(stderr, "Data Center is already configured!\n");
     return 1;
   }
-
-  if (num_servers == 0 || resources->ram == 0 || resources->disk == 0 || resources->cpu <= 0.0) {
+  if (num_servers == 0 || resources->ram == 0 || resources->disk == 0 || resources->cpu <= 0.0 || resources->real_core == 0) {
     fprintf(stderr, "Invalid configuration values.\n");
     return 1;
   }
@@ -43,14 +43,27 @@ int datacenter_configure(DataCenter *dc, size_t num_servers, Resources *resource
     fprintf(stderr, "Failed to allocate memory for servers.\n");
     return 1;
   }
+  if(pthread_mutex_init(&dc->mutex_reservation, NULL) !=0){
+    fprintf(stderr, "Failed to innitialize mutex for Reservation.\n");
+    return 1;
+  }
+  if(pthread_mutex_init(&dc->mutex_VM_types, NULL) !=0){
+    fprintf(stderr, "Failed to innitialize mutex for VMTypes.\n");
+    return 1;
+  }
+  dc->real_cores = resources->real_core;
 
   for (size_t i = 0; i < num_servers; i++) {
-    dc->servers[i].id = i+1;
-    dc->servers[i].total = *resources;
-    dc->servers[i].available = *resources;
-    dc->servers[i].num_hosted_vms = 0;
-  }
+  dc->servers[i].id = i+1;
+  dc->servers[i].total = *resources;
+  dc->servers[i].available = *resources;
+  dc->servers[i].num_hosted_vms = 0;
 
+  if(pthread_mutex_init(&dc->servers[i].mutex_server, NULL) != 0){
+      fprintf(stderr, "Failed to innitialize mutex in Server: %d.\n",(int)i);
+      return 1;
+    }
+  }
   dc->num_servers = num_servers;
   dc->configured = 1;
 
@@ -63,6 +76,8 @@ int datacenter_define_VM(DataCenter *dc, VMType *type){
     return 1;
   }
 
+  //Critical section
+  pthread_mutex_lock(&dc->mutex_VM_types);
   if(VMType_exists(dc, type->id) != NULL){
     fprintf(stderr, "VM type with id %s already exists.\n", type->id);
     return 1;
@@ -84,30 +99,46 @@ int datacenter_define_VM(DataCenter *dc, VMType *type){
   }
   
   dc->vm_types[dc->num_vm_types++] = *type;
+  //End of critical section
+  pthread_mutex_unlock(&dc->mutex_VM_types);
 
   return 0;
 }
 
 int datacenter_reserve(DataCenter *dc, Reservation *reservation) {
+  
   if (!dc->configured) {
     fprintf(stderr, "Data Center needs to be configured!\n");
     return 1;
   }
+  //Critical section
+  pthread_mutex_lock(&dc->mutex_reservation);
+
+  int locked[dc->num_servers];
+  memset(locked, 0, dc->num_servers);
+  lock_reservationServers(dc, reservation, locked);
 
   if(reservation_validate(dc, reservation) != 0){
+    unlock_reservationServers(dc, locked);
     return 1;
   }
-
   if (dc->num_reservations >= MAX_RESERVATIONS){
     fprintf(stderr, "Max number of reservations reached\n");
+    unlock_reservationServers(dc, locked);
     return 1;
   }
 
-  if (reservation_commit(dc, reservation) != 0)
+  if (reservation_commit(dc, reservation) != 0){
+    unlock_reservationServers(dc, locked);
     return 1;
+  }
+
 
   dc->reservations[dc->num_reservations] = *reservation;
   dc->num_reservations++;
+  unlock_reservationServers(dc, locked);
+  pthread_mutex_unlock(&dc->mutex_reservation);
+  //End of critical section
 
   return 0;
 }
@@ -128,7 +159,7 @@ int datacenter_execute(DataCenter *dc, const char *reservation_id) {
   wait_for_all_vms(res);
 
   res->state = RES_STATE_FINISHED;
-
+  //Critical section
   reservation_destroy(dc, res);
 
   return 0;
@@ -139,7 +170,13 @@ int datacenter_list(DataCenter *dc) {
     fprintf(stderr, "Data Center needs to be configured!\n");
     return 1;
   }
-
+  //Critical Section
+  pthread_mutex_lock(&dc->mutex_reservation);
+  pthread_mutex_lock(&dc->mutex_VM_types);
+  for (size_t i = 0; i < dc->num_servers; i++){
+    pthread_mutex_lock(&dc->servers[i].mutex_server);
+  }
+  
   printf("=================================== DATA CENTER STATUS ===================================\n");
   printf("\n[ PHYSICAL SERVERS ] (%zu total)\n", dc->num_servers);
   printf("------------------------------------------------------------------------------------------\n");
@@ -229,6 +266,12 @@ int datacenter_list(DataCenter *dc) {
   }
 
   printf("================================================================--------------------------\n\n");
+  for (size_t i = 0; i < dc->num_servers; i++){
+    pthread_mutex_unlock(&dc->servers[i].mutex_server);
+  }
+  pthread_mutex_unlock(&dc->mutex_VM_types);
+  pthread_mutex_unlock(&dc->mutex_reservation);
+  //End of critical section
   return 0;
 }
 

@@ -12,16 +12,17 @@
 #include "datacenter.h"
 #include "constants.h"
 
+
 void *process_commands(void *args) {
 		ThreadArgs *thread_args = (ThreadArgs *)args;
 		char *filepath = thread_args->filepath;
-		DataCenter *dc = thread_args->dc;
-		sem_t *thread_sem = thread_args->thread_sem;
+		DataCenter dc = thread_args->dc;
+		sem_t thread_sem = thread_args->thread_sem;
 
 		int file_fd = open(filepath, O_RDONLY);
 		if (file_fd < 0) {
 			fprintf(stderr, "Failed to open configuration file: %s\n", filepath);
-			return 1;
+			return (void*)1;
 		}
 		int cycle = 1;
 		while (cycle){
@@ -33,7 +34,7 @@ void *process_commands(void *args) {
 						fprintf(stderr, "Invalid define command. See H (help) for usage.\n");
 						continue;
 					}
-
+					//Has a critical section
 					if(datacenter_define_VM(&dc, &vmtype) != 0){
 						fprintf(stderr, "Failed to define VM.\n");
 						continue;
@@ -53,7 +54,7 @@ void *process_commands(void *args) {
 						fprintf(stderr, "Invalid reserve command. See H (help) for usage.\n");
 						continue;
 					}
-
+					//Has a critical section
 					if (datacenter_reserve(&dc, &reservation) != 0) {
 						fprintf(stderr, "Failed to reserve VMs.\n");
 						continue;
@@ -71,7 +72,7 @@ void *process_commands(void *args) {
 						fprintf(stderr, "Invalid execute command. See H (help) for usage.\n");
 						continue;
 					}
-
+					//Has a critical section
 					if (datacenter_execute(&dc, id) != 0) {
 						fprintf(stderr, "Failed to execute reservation.\n");
 						continue;
@@ -82,6 +83,7 @@ void *process_commands(void *args) {
 					break;
 
 				case CMD_LIST:
+					//Has a critical cesction
 					if (datacenter_list(&dc) != 0) {
 						fprintf(stderr, "Failed to list VMs.\n");
 						continue;
@@ -126,14 +128,14 @@ void *process_commands(void *args) {
 						fprintf(stderr, "Failed to close configuration file: %s\n",filepath);
 						free(thread_args);
 						sem_post(&thread_sem); // Increment semaphore on failure
-						return 1;
+						return (void*)1;
 					}
 					break;
 				}
 		}
 	sem_post(&thread_sem); // Increment semaphore after thread completion
 	free(thread_args);
-	return 0;
+	return (void*)0;
 }
 
 
@@ -173,14 +175,13 @@ int main(int argc, char **argv){
 		return 1;
 	}
 		
-	
-	while(1){
-		struct dirent *entry = readdir(dir);
+	struct dirent *entry;
+	while((entry = readdir(dir))){
 		if (entry == NULL) {
 			break;
 		}
 		size_t len = strlen(entry->d_name);
-		if (len > 4 && strcmp(entry->d_name + len - 4, ".conf") == 0) {
+		if (len > 5 && strcmp(entry->d_name + len - 5, ".conf") == 0) {
 			if (conf_list_add(conf_files, input_dir, entry->d_name) != 0) {
 				fprintf(stderr, "Failed to add configuration file: %s\n", entry->d_name);
 				return 1;
@@ -195,7 +196,8 @@ int main(int argc, char **argv){
 	Resources resources = {
     .ram = ram,
     .disk = disk,
-    .cpu = cpu
+    .cpu = cpu,
+	.real_core = real_cores
 	};
 
 	if(datacenter_configure(&dc, servers, &resources) != 0){
@@ -204,7 +206,7 @@ int main(int argc, char **argv){
 	}
 	
 	sem_t thread_sem;
-	if (sem_init(&thread_sem, 0, max_threads) != 0) {
+	if (sem_init(&thread_sem, 0, (unsigned int)max_threads) != 0) {
 		fprintf(stderr, "Failed to initialize semaphore for thread limit.\n");
 		return 1;
 	}
@@ -222,8 +224,8 @@ int main(int argc, char **argv){
 			return 1;
 		}
 		args->filepath = conf_files->files[count].filepath;
-    	args->dc = &dc;
-		args->thread_sem = &thread_sem;
+    	args->dc = dc;
+		args->thread_sem = thread_sem;
 
 		//Avoid the loss of a thread.
 		if (count >= max_threads) 
@@ -237,12 +239,11 @@ int main(int argc, char **argv){
 		}
 		count++;
 	}
-	int active_threads = (count < max_threads) ? count : max_threads;
-	for (int i = 0; i < active_threads; i++) {
+	size_t active_threads = (count < max_threads) ? count : max_threads;
+	for (size_t i = 0; i < active_threads; i++) {
 		pthread_join(thread[i], NULL);
 	}
 	datacenter_destroy(&dc);
 	conf_list_destroy(conf_files);
-	closedir(dir);
 	return 0;
 }

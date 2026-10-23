@@ -7,6 +7,7 @@ typedef struct {
     size_t ram;  // RAM in GB
     size_t disk; // Disk Space in GB
     double cpu;  // Number of cores/Vcpu
+    size_t real_core; 
 } Resources;
 
 /**
