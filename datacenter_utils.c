@@ -409,8 +409,8 @@ void wait_for_all_vms(Reservation *res) {
 		}
 		vm->state = VM_STATE_TERMINATED;
 		pthread_mutex_unlock(&vm->server->mutex_server);
+		count++;
 	}
-	count++;
 }
 
 const char *vm_state_to_string(VMState state) {
