@@ -223,12 +223,16 @@ void spawn_vm_child(VM *vm, DataCenter *dc) {
 	struct rlimit rlRam; 
 	rlRam.rlim_cur = vm->type->required.ram << GB_TO_BYTE; // Convert GB to bytes
 	rlRam.rlim_max = vm->type->required.ram << GB_TO_BYTE;
-	setrlimit(RLIMIT_AS, &rlRam);
+	if(setrlimit(RLIMIT_AS, &rlRam) != 0){
+		fprintf(stderr, "Error setting the ram limit in VM: %s", vm->id);
+	}
 
 	struct rlimit rlDisk;
 	rlDisk.rlim_cur = vm->type->required.disk << GB_TO_BYTE;
 	rlDisk.rlim_max = vm->type->required.disk << GB_TO_BYTE;
-	setrlimit(RLIMIT_FSIZE, &rlDisk);
+	if(setrlimit(RLIMIT_FSIZE, &rlDisk) != 0){
+		fprintf(stderr, "Error setting the disk limit in VM: %s", vm->id);
+	}
 	
 	int limit_val = cpu_limit(vm->type->required.cpu,dc);
 	// Int to string conversion for cpulimit argument
@@ -309,8 +313,8 @@ void clone_directory(char *srcPath, char *destPath) {
 			clone_directory(srcFilePath, destFilePath);
 		} else {
 			int srcFile = open(srcFilePath, O_RDONLY);
-			// Create destination file with read/write permissions for owner, and read for group and others
-			int destFile = open(destFilePath, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+			// Create destination file with read/write permissions equal to the original
+			int destFile = open(destFilePath, O_WRONLY | O_CREAT | O_TRUNC, entryStat.st_mode);
 		
 
 			if (srcFile < 0 || destFile < 0) {
@@ -323,7 +327,9 @@ void clone_directory(char *srcPath, char *destPath) {
 			char buffer[BUFFER_SIZE];
 			ssize_t bytesRead;
 			while ((bytesRead = read(srcFile, buffer, sizeof(buffer))) > 0) {
-				write(destFile, buffer, (size_t)bytesRead);
+				if(write(destFile, buffer, (size_t)bytesRead) != 0){
+					fprintf(stderr, "Error in writing in path %s", destFilePath);
+				}
 			}
 
 			close(srcFile);
@@ -361,7 +367,9 @@ int spawn_all_vms(Reservation *res, DataCenter *dc) {
 			return 1;
 		} else if (pid == 0) {
 			// Child process
-			chdir(temp_dir);
+			if(chdir(temp_dir) != 0){
+				fprintf(stderr, "Error changing to temp directory: %s", temp_dir);
+			}
 			spawn_vm_child(vm, dc);	
 		}else{
 			vm->pid = pid;
