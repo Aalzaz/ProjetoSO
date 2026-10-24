@@ -82,11 +82,13 @@ int datacenter_define_VM(DataCenter *dc, VMType *type){
   pthread_mutex_lock(&dc->mutex_VM_types);
   if(VMType_exists(dc, type->id) != NULL){
     fprintf(stderr, "VM type with id %s already exists.\n", type->id);
+    pthread_mutex_unlock(&dc->mutex_VM_types);
     return 1;
   }
 
   if (!file_exists(type->exec_path)) {
     fprintf(stderr, "Invalid executable path.\n");
+    pthread_mutex_unlock(&dc->mutex_VM_types);
     return 1;
   }
 
@@ -94,16 +96,20 @@ int datacenter_define_VM(DataCenter *dc, VMType *type){
   char abs_exec_path[MAX_PATH_SIZE];
   if(absolute_path(type->exec_path, abs_exec_path, sizeof(abs_exec_path) != 0)){
     fprintf(stderr, "Failed to resolve absolute path for exec.\n");
+    pthread_mutex_unlock(&dc->mutex_VM_types);
+    return 1;
   }
   strncpy(type->exec_path, abs_exec_path, MAX_PATH_SIZE);
-  
+
   if (!path_exists(type->input_folder)) {
     fprintf(stderr, "Invalid input folder.\n");
+    pthread_mutex_unlock(&dc->mutex_VM_types);
     return 1;
   }
 
   if(dc->num_vm_types >= MAX_VM_TYPES){
     fprintf(stderr, "Maximum of VM types reached.\n");
+    pthread_mutex_unlock(&dc->mutex_VM_types);
     return 1;
   }
   
@@ -120,34 +126,41 @@ int datacenter_reserve(DataCenter *dc, Reservation *reservation) {
     fprintf(stderr, "Data Center needs to be configured!\n");
     return 1;
   }
-  //Critical section
+  //Critical section for Reservation
   pthread_mutex_lock(&dc->mutex_reservation);
+  if(reservation_exists(dc, reservation->id)){
+		fprintf(stderr, "Reservation with id %s already exists.\n", reservation->id);
+    pthread_mutex_unlock(&dc->mutex_reservation);
+		return 1;
+	}
+  if (dc->num_reservations >= MAX_RESERVATIONS){
+    fprintf(stderr, "Max number of reservations reached\n");
+    pthread_mutex_unlock(&dc->mutex_reservation);
+    return 1;
+  }
+  pthread_mutex_unlock(&dc->mutex_reservation);
 
+  //Critical section for servers
   int locked[dc->num_servers];
-  memset(locked, 0, dc->num_servers);
+  memset(locked, 0, dc->num_servers * sizeof(int));
   lock_reservationServers(dc, reservation, locked);
 
   if(reservation_validate(dc, reservation) != 0){
     unlock_reservationServers(dc, locked);
     return 1;
   }
-  if (dc->num_reservations >= MAX_RESERVATIONS){
-    fprintf(stderr, "Max number of reservations reached\n");
-    unlock_reservationServers(dc, locked);
-    return 1;
-  }
-
   if (reservation_commit(dc, reservation) != 0){
     unlock_reservationServers(dc, locked);
     return 1;
   }
-
-
+  unlock_reservationServers(dc, locked);
+  
+  //Critical section for reservation
+  pthread_mutex_lock(&dc->mutex_reservation);
   dc->reservations[dc->num_reservations] = *reservation;
   dc->num_reservations++;
-  unlock_reservationServers(dc, locked);
   pthread_mutex_unlock(&dc->mutex_reservation);
-  //End of critical section
+  //End of critical sections
 
   return 0;
 }

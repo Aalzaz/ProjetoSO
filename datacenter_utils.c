@@ -22,16 +22,7 @@ VMType *VMType_exists(DataCenter *dc, const char* type_id){
 	return NULL;
 }
 
-/**
- * Checks if a reservation with the given id already exists in the Data Center.
- * 
- * @param dc Pointer to Data Center.
- * @param reservation_id Id of the reservation being checked.
- * 
- * @return 1 if the reservation exists.
- * @return 0 if the reservation does not exist.
- */	
-static int reservation_exists(DataCenter *dc, const char* reservation_id){
+int reservation_exists(DataCenter *dc, const char* reservation_id){
 	for(size_t i = 0; i < dc->num_reservations; i++){
 		if(strncmp(reservation_id, dc->reservations[i].id, MAX_STRING_SIZE) == 0){
 			return 1;
@@ -41,11 +32,6 @@ static int reservation_exists(DataCenter *dc, const char* reservation_id){
 }
 
 int reservation_validate(DataCenter *dc, Reservation *reservation) {
-	if(reservation_exists(dc, reservation->id)){
-		fprintf(stderr, "Reservation with id %s already exists.\n", reservation->id);
-		return 1;
-	}
-
 	Resources available[dc->num_servers];
 	size_t hosted_count[dc->num_servers];
 	size_t vms_count = 0;
@@ -55,7 +41,7 @@ int reservation_validate(DataCenter *dc, Reservation *reservation) {
 		available[i] = dc->servers[i].available;
 		hosted_count[i] = dc->servers[i].num_hosted_vms;
 	}
-
+ 	//Lock for reservation not required because, a thread "holds" only one unique reservation
 	for (size_t i = 0; i < reservation->items_count; i++) {
 		ReservationItem *item = &reservation->items[i];
 
@@ -64,7 +50,9 @@ int reservation_validate(DataCenter *dc, Reservation *reservation) {
 			return 1;
 		}
 
+		pthread_mutex_lock(&dc->mutex_VM_types);
 		VMType *vm_type = VMType_exists(dc, item->vm_type_id);
+		pthread_mutex_unlock(&dc->mutex_VM_types);
 
 		if(vm_type == NULL){
 			fprintf(stderr, "VM of type %s does not exist\n", item->vm_type_id);
@@ -137,8 +125,8 @@ static void reservation_rollback(Reservation *reservation, size_t initial_vms){
 
 int reservation_commit(DataCenter *dc, Reservation *reservation){
 	// Keep track of how many vms existed before.
+	//Lock for reservation not required because, a thread "holds" only one unique reservation
 	size_t initial_vms = reservation->num_vms;
-
 	for (size_t i = 0; i < reservation->items_count; i++) {
 		ReservationItem *item = &reservation->items[i];
 		Server *server = &dc->servers[item->server_id - 1];
@@ -213,9 +201,10 @@ void reservation_destroy(DataCenter *dc, Reservation *reservation) {
 	}
 
 	// Reservation not found (should never happen).
-	if (idx == dc->num_reservations)
+	if (idx == dc->num_reservations){
+		pthread_mutex_unlock(&dc->mutex_reservation);
 		return;
-
+	}
 	// Remove the reservation by shifting the remaining ones.
 	memmove(&dc->reservations[idx],
 					&dc->reservations[idx + 1],

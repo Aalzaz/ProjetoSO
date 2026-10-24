@@ -14,6 +14,18 @@
  */
 VMType *VMType_exists(DataCenter *dc, const char* type_id);
 
+
+/**
+ * Checks if a reservation with the given id already exists in the Data Center.
+ * 
+ * @param dc Pointer to Data Center.
+ * @param reservation_id Id of the reservation being checked.
+ * 
+ * @return 1 if the reservation exists.
+ * @return 0 if the reservation does not exist.
+ */	
+int reservation_exists(DataCenter *dc, const char* reservation_id);
+
 /**
  * Simulates the placement of every VM requested in the reservation using a
  * temporary copy of each server's available resources. The Data Center state
