@@ -16,8 +16,8 @@
 void *process_commands(void *args) {
 		ThreadArgs *thread_args = (ThreadArgs *)args;
 		char *filepath = thread_args->filepath;
-		DataCenter dc = thread_args->dc;
-		sem_t thread_sem = thread_args->thread_sem;
+		DataCenter *dc = thread_args->dc;
+		sem_t *thread_sem = thread_args->thread_sem;
 
 		int file_fd = open(filepath, O_RDONLY);
 		if (file_fd < 0) {
@@ -35,7 +35,7 @@ void *process_commands(void *args) {
 						continue;
 					}
 					//Has a critical section
-					if(datacenter_define_VM(&dc, &vmtype) != 0){
+					if(datacenter_define_VM(dc, &vmtype) != 0){
 						fprintf(stderr, "Failed to define VM.\n");
 						continue;
 					}
@@ -55,7 +55,7 @@ void *process_commands(void *args) {
 						continue;
 					}
 					//Has a critical section
-					if (datacenter_reserve(&dc, &reservation) != 0) {
+					if (datacenter_reserve(dc, &reservation) != 0) {
 						fprintf(stderr, "Failed to reserve VMs.\n");
 						continue;
 					}
@@ -73,7 +73,7 @@ void *process_commands(void *args) {
 						continue;
 					}
 					//Has a critical section
-					if (datacenter_execute(&dc, id) != 0) {
+					if (datacenter_execute(dc, id) != 0) {
 						fprintf(stderr, "Failed to execute reservation.\n");
 						continue;
 					}
@@ -84,7 +84,7 @@ void *process_commands(void *args) {
 
 				case CMD_LIST:
 					//Has a critical cesction
-					if (datacenter_list(&dc) != 0) {
+					if (datacenter_list(dc) != 0) {
 						fprintf(stderr, "Failed to list VMs.\n");
 						continue;
 					}
@@ -127,13 +127,13 @@ void *process_commands(void *args) {
 					if (close(file_fd) < 0) {
 						fprintf(stderr, "Failed to close configuration file: %s\n",filepath);
 						free(thread_args);
-						sem_post(&thread_sem); // Increment semaphore on failure
+						sem_post(thread_sem); // Increment semaphore on failure
 						return (void*)1;
 					}
 					break;
 				}
 		}
-	sem_post(&thread_sem); // Increment semaphore after thread completion
+	sem_post(thread_sem); // Increment semaphore after thread completion
 	free(thread_args);
 	return (void*)0;
 }
@@ -144,7 +144,7 @@ int main(int argc, char **argv){
 	datacenter_init(&dc);
 
 	if (argc != 8) {
-    fprintf(stderr, "Usage: %s <servers> <ram> <disk> <cpus> <input_dir> <real_cores> <max_threads>\n", argv[0]);
+    fprintf(stderr, "Usage: %s <servers> <ram> <disk> <cpus> <real_cores> <input_dir> <max_threads>\n", argv[0]);
     return 1;
 	}
 
@@ -154,14 +154,14 @@ int main(int argc, char **argv){
 	size_t real_cores;
 	size_t max_threads;
 	double cpu;
-	char *input_dir = argv[5];
+	char *input_dir = argv[6];
 	DIR *dir = opendir(input_dir);
 
 	if (parse_size_t_arg(argv[1], &servers) != 0 ||
 			parse_size_t_arg(argv[2], &ram) != 0 ||
 			parse_size_t_arg(argv[3], &disk) != 0 ||
 			parse_double_arg(argv[4], &cpu) != 0 ||
-			parse_size_t_arg(argv[6], &real_cores) != 0 ||
+			parse_size_t_arg(argv[5], &real_cores) != 0 ||
 			parse_size_t_arg(argv[7], &max_threads) != 0 ||
 			dir == NULL){
 		fprintf(stderr, "Invalid command line arguments.\n");
@@ -224,8 +224,8 @@ int main(int argc, char **argv){
 			return 1;
 		}
 		args->filepath = conf_files->files[count].filepath;
-    	args->dc = dc;
-		args->thread_sem = thread_sem;
+    	args->dc = &dc;
+		args->thread_sem = &thread_sem;
 
 		//Avoid the loss of a thread.
 		if (count >= max_threads) 

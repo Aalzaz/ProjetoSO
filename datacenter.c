@@ -16,6 +16,8 @@ void datacenter_init(DataCenter *dc) {
   dc->num_reservations = 0;
 
   dc->configured = 0;
+
+  dc->real_cores = 0;
 }
 
 void datacenter_destroy(DataCenter *dc) {
@@ -88,6 +90,13 @@ int datacenter_define_VM(DataCenter *dc, VMType *type){
     return 1;
   }
 
+  //Fixes the loss of files, cause by the chdir in fork
+  char abs_exec_path[MAX_PATH_SIZE];
+  if(absolute_path(type->exec_path, abs_exec_path, sizeof(abs_exec_path) != 0)){
+    fprintf(stderr, "Failed to resolve absolute path for exec.\n");
+  }
+  strncpy(type->exec_path, abs_exec_path, MAX_PATH_SIZE);
+  
   if (!path_exists(type->input_folder)) {
     fprintf(stderr, "Invalid input folder.\n");
     return 1;
@@ -156,6 +165,7 @@ int datacenter_execute(DataCenter *dc, const char *reservation_id) {
 
   res->state = RES_STATE_RUNNING;
 
+   //Critical section
   wait_for_all_vms(res);
 
   res->state = RES_STATE_FINISHED;

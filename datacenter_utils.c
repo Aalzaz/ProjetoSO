@@ -200,27 +200,6 @@ Reservation *find_pending_reservation(DataCenter *dc, const char *reservation_id
 void reservation_destroy(DataCenter *dc, Reservation *reservation) {
 	// Free every VM belonging to the reservation.
 	for (size_t i = 0; i < reservation->num_vms; i++) {
-		pthread_mutex_lock(&reservation->vms[i]->server->mutex_server);
-		VM *vm = reservation->vms[i];
-		Server *server = vm->server;
-
-		// Return the VM resources back to the hosting server.
-		resources_add(&server->available, vm->type->required);
-
-		// Remove the VM from the server's hosted VM list.
-		for (size_t j = 0; j < server->num_hosted_vms; j++) {
-			if (server->hosted_vms[j] == vm) {
-				// Shift the remaining VMs one position to the left.
-				memmove(&server->hosted_vms[j],
-								&server->hosted_vms[j + 1],
-								(server->num_hosted_vms - j - 1) * sizeof(VM *));
-
-				server->num_hosted_vms--;
-				break;
-			}
-		}
-		pthread_mutex_unlock(&server->mutex_server);
-		free(vm);
 		reservation->vms[i] = NULL;
 	}
 	pthread_mutex_lock(&dc->mutex_reservation);
@@ -247,7 +226,7 @@ void reservation_destroy(DataCenter *dc, Reservation *reservation) {
 }
 int cpu_limit(double vmCPU, DataCenter *dc) {
     double limit = (100.0 * vmCPU * (double)dc->real_cores) / (dc->servers[0].total.cpu * (double)dc->num_servers);
-    return (limit <= 0) ? 1 : limit;
+    return (int)((limit <= 0) ? 1 : limit);
 }
 
 void spawn_vm_child(VM *vm, DataCenter *dc) {
@@ -387,7 +366,6 @@ int spawn_all_vms(Reservation *res, DataCenter *dc) {
         snprintf(temp_dir, sizeof(temp_dir), "%s/%s/%s", TEMP_DIR, res->id, vm->id);
 		//Path is guaranted by the function
 		clone_directory(vm->type->input_folder, temp_dir);
-
 		pid_t pid = fork();
 		if (pid < 0) {
 			fprintf(stderr, "Failed to fork for VM %s.\n", vm->id);
@@ -406,13 +384,41 @@ int spawn_all_vms(Reservation *res, DataCenter *dc) {
 }
 
 void wait_for_all_vms(Reservation *res) {
-	for (size_t i = 0; i < res->num_vms; i++) {
-		int status = 0;
-		waitpid(res->vms[i]->pid, &status, 0);
-		if(WIFEXITED(status) && WEXITSTATUS(status) != 0){
-			fprintf(stderr, "VM %s exited with an error.\n", res->vms[i]->id);
+	size_t count = 0;
+	while (count < res->num_vms){
+		int status;
+		pid_t pid = wait(&status);
+		if(pid < 0){
+			fprintf(stderr, "A VM exited with an error.\n");
 		}
-		res->vms[i]->state = VM_STATE_TERMINATED;
+		if(WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+			fprintf(stderr, "VM %d exited with an error.\n", (int)pid);
+			exit(EXIT_FAILURE);
+		}
+		// Return the VM resources back to the hosting server.
+		for (size_t i = 0; i < res->num_vms; i++){
+			VM *vm = res->vms[i];
+			if(vm->pid == pid){
+				// Critical section
+				pthread_mutex_lock(&vm->server->mutex_server);
+				//Return resources
+				resources_add(&vm->server->available, vm->type->required);
+				Server *server = vm->server;
+				// Remove the VM from the server's hosted VM list.
+				for (size_t j = 0; j < server->num_hosted_vms; j++){
+					// Shift the remaining VMs one position to the left.
+					if(server->hosted_vms[j] == vm){
+						memmove(&server->hosted_vms[j], &server->hosted_vms[j+1],
+								(server->num_hosted_vms - j - 1) * sizeof(VM*));
+						server->num_hosted_vms--;
+						break;
+					}
+				}
+				vm->state = VM_STATE_TERMINATED;
+				pthread_mutex_unlock(&vm->server->mutex_server);
+				break;
+			}
+		}
 	}
 }
 
