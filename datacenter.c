@@ -94,7 +94,7 @@ int datacenter_define_VM(DataCenter *dc, VMType *type){
 
   //Fixes the loss of files, cause by the chdir in fork
   char abs_exec_path[MAX_PATH_SIZE];
-  if(absolute_path(type->exec_path, abs_exec_path, sizeof(abs_exec_path) != 0)){
+  if(absolute_path(type->exec_path, abs_exec_path, sizeof(abs_exec_path)) != 0){
     fprintf(stderr, "Failed to resolve absolute path for exec.\n");
     pthread_mutex_unlock(&dc->mutex_VM_types);
     return 1;

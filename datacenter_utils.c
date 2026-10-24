@@ -188,6 +188,7 @@ Reservation *find_pending_reservation(DataCenter *dc, const char *reservation_id
 void reservation_destroy(DataCenter *dc, Reservation *reservation) {
 	// Free every VM belonging to the reservation.
 	for (size_t i = 0; i < reservation->num_vms; i++) {
+		free(reservation->vms[i]);
 		reservation->vms[i] = NULL;
 	}
 	pthread_mutex_lock(&dc->mutex_reservation);
@@ -327,7 +328,7 @@ void clone_directory(char *srcPath, char *destPath) {
 			char buffer[BUFFER_SIZE];
 			ssize_t bytesRead;
 			while ((bytesRead = read(srcFile, buffer, sizeof(buffer))) > 0) {
-				if(write(destFile, buffer, (size_t)bytesRead) != 0){
+				if(write(destFile, buffer, (size_t)bytesRead) < 0){
 					fprintf(stderr, "Error in writing in path %s", destFilePath);
 				}
 			}
@@ -383,40 +384,33 @@ int spawn_all_vms(Reservation *res, DataCenter *dc) {
 void wait_for_all_vms(Reservation *res) {
 	size_t count = 0;
 	while (count < res->num_vms){
+		pid_t pid = res->vms[count]->pid;
 		int status;
-		pid_t pid = wait(&status);
-		if(pid < 0){
-			fprintf(stderr, "A VM exited with an error.\n");
-		}
-		if(WIFEXITED(status) && WEXITSTATUS(status) != 0) {
+		if((waitpid(pid, &status, 0)) < 0){
+			fprintf(stderr, "A VM exited: %s an error.\n", res->vms[count]->id);
+		}else if( (WIFEXITED(status) && WEXITSTATUS(status)) != 0) {
 			fprintf(stderr, "VM %d exited with an error.\n", (int)pid);
-			exit(EXIT_FAILURE);
 		}
+		VM *vm = res->vms[count];
+		// Critical section
+		pthread_mutex_lock(&vm->server->mutex_server);
 		// Return the VM resources back to the hosting server.
-		for (size_t i = 0; i < res->num_vms; i++){
-			VM *vm = res->vms[i];
-			if(vm->pid == pid){
-				// Critical section
-				pthread_mutex_lock(&vm->server->mutex_server);
-				//Return resources
-				resources_add(&vm->server->available, vm->type->required);
-				Server *server = vm->server;
-				// Remove the VM from the server's hosted VM list.
-				for (size_t j = 0; j < server->num_hosted_vms; j++){
-					// Shift the remaining VMs one position to the left.
-					if(server->hosted_vms[j] == vm){
-						memmove(&server->hosted_vms[j], &server->hosted_vms[j+1],
-								(server->num_hosted_vms - j - 1) * sizeof(VM*));
-						server->num_hosted_vms--;
-						break;
-					}
-				}
-				vm->state = VM_STATE_TERMINATED;
-				pthread_mutex_unlock(&vm->server->mutex_server);
-				break;
+		resources_add(&vm->server->available, vm->type->required);
+		Server *server = vm->server;
+		// Remove the VM from the server's hosted VM list.
+		for (size_t j = 0; j < server->num_hosted_vms; j++){
+		// Shift the remaining VMs one position to the left.
+		if(server->hosted_vms[j] == vm){
+			memmove(&server->hosted_vms[j], &server->hosted_vms[j+1],
+				   (server->num_hosted_vms - j - 1) * sizeof(VM*));
+					server->num_hosted_vms--;
+			break;
 			}
 		}
+		vm->state = VM_STATE_TERMINATED;
+		pthread_mutex_unlock(&vm->server->mutex_server);
 	}
+	count++;
 }
 
 const char *vm_state_to_string(VMState state) {
